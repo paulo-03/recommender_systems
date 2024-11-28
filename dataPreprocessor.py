@@ -54,3 +54,13 @@ class DataPreprocessor:
             raise ValueError("Invalid similarity metric. Please choose 'cosine' or 'pearson'.")
 
         return similarity
+
+    def fast_cosine_similarity(self, ratings, kind='user', epsilon=1e-9):
+        # epsilon -> small number for handling dived-by-zero errors
+        sim = 0
+        if kind == 'user':
+            sim = ratings.dot(ratings.T) + epsilon
+        elif kind == 'item':
+            sim = ratings.T.dot(ratings) + epsilon
+        norms = np.array([np.sqrt(np.diagonal(sim))])
+        return (sim / norms / norms.T)
