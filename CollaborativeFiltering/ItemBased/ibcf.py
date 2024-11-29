@@ -9,7 +9,7 @@ class Ibcf:
         Initializes the DataPreprocessor object.
 
         Args:
-            data: DataFrame containing user-item-rating pairs with columns 'user_id', 'book_id', and 'rating'.
+                data_path: Path to the CSV file containing user-item-rating pairs with columns 'user_id', 'book_id', and 'rating'.
         """
         data = pd.read_csv(data_path)
         self._data_to_matrix_df(data)
@@ -56,7 +56,6 @@ class Ibcf:
         Generates a CSV file for submission to Kaggle.
 
         Args:
-            predictions: numpy matrix of user_id x book_id full of rankings.
             test_path: Path to the test.csv file.
             output_path: Path to save the submission CSV file.
         """
