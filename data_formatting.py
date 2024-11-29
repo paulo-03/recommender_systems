@@ -31,10 +31,13 @@ class DataFormatting:
             'index_to_item': {}
         }
 
-        for idx, (user_id, book_id) in enumerate(zip(df.index, df.columns)):
+        for idx, user_id in enumerate(df.index):
             maps['user_to_index'][user_id] = idx
-            maps['index_to_user'][user_id] = user_id
-            maps['item_to_index'][user_id] = idx
-            maps['index_to_item'][user_id] = book_id
+            maps['index_to_user'][idx] = user_id
+
+        for idx, book_id in enumerate(df.columns):
+            maps['item_to_index'][book_id] = idx
+            maps['index_to_item'][idx] = book_id
+
 
         return matrix_np, maps
