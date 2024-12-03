@@ -14,7 +14,7 @@ from tqdm.notebook import tqdm
 
 class EASE:
     def __init__(self, X: csr_matrix, maps: dict):
-        self.X = X / X.max()  # just to normalize de rating between 0 and 1
+        self.X = self._process_data(X)
         self.n_user = self.X.shape[0]
         self.n_item = self.X.shape[1]
         self.user_to_index = maps['user_to_index']
@@ -24,7 +24,14 @@ class EASE:
         self.rating = None
         self.pred = None
 
-    def fit(self, lambda_: float = 50000):
+    @staticmethod
+    def _process_data(X: csr_matrix) -> csr_matrix:
+        """Process the data to make it useful in the EASE pipeline by putting a one for the score higher or equal than
+        3 and 0 otherwise"""
+        X.data = (X.data >= 3.0).astype(float)
+        return X
+
+    def fit(self, lambda_: float = 0.05):
         """
         lambda_: l2-regularization term
         """
@@ -56,7 +63,16 @@ class EASE:
         end = time.time()
         print(f"\nPrediction completed in {str(timedelta(seconds=end - start))}")
 
-    def _map_score_to_rating(self) -> np.ndarray:
+    def _map_score_to_rating(self, k=10, c=0.0, rating_min=1.0, rating_max=5.0):
+        sigmoid = 1 / (1 + np.exp(-k * (self.score - c)))
+        return rating_min + (rating_max - rating_min) * sigmoid
+
+    def ___map_score_to_rating(self) -> np.ndarray:
+        """TODO"""
+        min_score, max_score = self.score.min(), self.score.max()
+        return 1 + 4 * (self.score - min_score) / (max_score - min_score)  # best RMSE: 1 + 3 * (self.score - min_score) / (max_score - min_score) or 2 + 1.5 * (self.score - min_score) / (max_score - min_score)
+
+    def __map_score_to_rating(self) -> np.ndarray:
         """TODO"""
         # Create the map to specify the rank score to rating
         score_rank_to_rating = self._create_map_score_to_rating()
@@ -65,6 +81,8 @@ class EASE:
         ratings_matrix = np.empty_like(self.score, dtype=np.float64)
 
         for user in tqdm(range(self.n_user)):
+            # Create the map to specify the rank score to rating
+            score_rank_to_rating = self._create_map_score_to_rating()
             # Get the user scores
             row = self.score[user, :]
             # Get the sorted indices of the user scores in descending order
@@ -81,7 +99,7 @@ class EASE:
     def _create_map_score_to_rating(self):
         """TODO"""
         return {position_score: rating
-                for position_score, rating in enumerate(np.linspace(start=1, stop=5, num=self.n_item))}
+                for position_score, rating in enumerate(np.linspace(start=3, stop=1.5, num=self.n_item))}
 
     def retrieve_pred(self, df: pd.DataFrame):
         """
