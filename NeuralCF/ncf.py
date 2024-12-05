@@ -8,77 +8,23 @@ import pandas as pd
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from torch.utils.data import Dataset, DataLoader, random_split
+from torch.utils.data import DataLoader, random_split
 import matplotlib.pyplot as plt
+from models import InteractionDataset, GMF, MLP, NeuMF
 
 
-# Create a dataset class
-class InteractionDataset(Dataset):
-    def __init__(self, data_path: str):
-        train_df = pd.read_csv(data_path)
+# Define the NCF class
+class NCF:
+    def __init__(self, data_path: str, val_ratio: float, batch_size: int, epochs: int, device: torch.device,
+                 lr: float, weight_decay: float, plot_folder: str, model_to_use: str,
+                 embedding_dim_mlp: int = 0, embedding_dim_gmf: int = 0, seed: int = 42):
 
-        # Map the user_id and book_id to a unique index
-        user_id_to_idx = {
-            user_id: idx
-            for idx, user_id
-            in enumerate(train_df['user_id'].unique())
-        }
-        self.num_users = len(user_id_to_idx)
+        # Fix the seed for reproducibility
+        torch.manual_seed(seed=seed)
 
-        item_id_to_idx = {
-            book_id: idx
-            for idx, book_id
-            in enumerate(train_df['book_id'].unique())
-        }
-        self.num_items = len(item_id_to_idx)
-
-        # Retrieve both needed information
-        train_df['user_idx'] = train_df['user_id'].apply(lambda x: user_id_to_idx[x])
-        train_df['book_idx'] = train_df['book_id'].apply(lambda x: item_id_to_idx[x])
-
-        self.user_item_pairs = train_df[["user_idx", "book_idx"]].values
-        self.ratings = (train_df["rating"].values - 1) / 4  # normalize ratings between 0 and 1
-
-    def __len__(self):
-        return len(self.ratings)
-
-    def __getitem__(self, idx):
-        return ((self.user_item_pairs[idx][:, 0].long(),
-                self.user_item_pairs[idx][:, 1].long()),
-                self.ratings[idx].float())
-
-
-# Define the NCF model
-class NCF(nn.Module):
-    def __init__(self, num_users, num_items, embedding_dim):
-        super(NCF, self).__init__()
-        self.user_embedding = nn.Embedding(num_users, embedding_dim)
-        self.item_embedding = nn.Embedding(num_items, embedding_dim)
-        self.fc_layers = nn.Sequential(
-            nn.Linear(embedding_dim * 2, 128),
-            nn.BatchNorm1d(128),  # Batch normalization
-            nn.ReLU(),
-            nn.Dropout(0.5),
-            nn.Linear(128, 64),
-            nn.BatchNorm1d(64),
-            nn.ReLU(),
-            nn.Dropout(0.5),
-            nn.Linear(64, 1)
-        )
-
-    def forward(self, user, item):
-        user_embed = self.user_embedding(user)
-        item_embed = self.item_embedding(item)
-        interaction = torch.cat([user_embed, item_embed], dim=-1)
-        return self.fc_layers(interaction).squeeze()
-
-
-# Define the NCFTrainer class
-class NCFTrainer:
-    def __init__(self, data_path: str, val_ratio: float, batch_size: int, embedding_dim: int, epochs: int,
-                 device: torch.device, lr: float, weight_decay: float, plot_folder: str):
         # Define constants
-        self.embedding_dim = embedding_dim
+        self.embedding_dim_mlp = embedding_dim_mlp
+        self.embedding_dim_gmf = embedding_dim_gmf
         self.batch_size = batch_size
         self.epochs = epochs
         self.val_ratio = val_ratio
@@ -98,23 +44,41 @@ class NCFTrainer:
 
         # Load data and create dataloader
         dataset = InteractionDataset(data_path=data_path)
+        self.user_id_to_idx = dataset.user_id_to_idx
+        self.item_id_to_idx = dataset.item_id_to_idx
         self.num_users = dataset.num_users
         self.num_items = dataset.num_items
-
-        # Split into training and validation sets (80-20 split)
-        self.train_size = int((1 - self.val_ratio) * len(dataset))
+        self.train_size = int((1 - self.val_ratio) * len(dataset))  # Split into training and validation sets
         self.val_size = len(dataset) - self.train_size
         self.train_dataset, self.val_dataset = random_split(dataset, [self.train_size, self.val_size])
         self.train_loader = DataLoader(self.train_dataset, batch_size=self.batch_size, shuffle=True)
         self.val_loader = DataLoader(self.val_dataset, batch_size=self.batch_size, shuffle=False)
 
-        # Initiate model, criterion and optimizer
-        self.model = NCF(self.num_users, self.num_items, self.embedding_dim).to(self.device)
-        self.criterion = nn.MSELoss
-        self.optimizer = optim.Adam(self.model.parameters(), lr=self.lr, weight_decay=self.weight_decay)
-        # TODO: I choose the cosine, but might be good to use other schedular for the lr evolution
-        self.schedular = torch.optim.lr_scheduler.ReduceLROnPlateau(self.optimizer, mode='min', factor=0.5, patience=2, verbose=True)
+        # Initiate model, criterion, optimizer and schedular
+        if model_to_use == 'GMF':
+            self.model = GMF(self.num_users, self.num_items, self.embedding_dim_gmf).to(self.device)
+        elif model_to_use == 'MLP':
+            self.model = MLP(self.num_users, self.num_items, self.embedding_dim_mlp).to(self.device)
+        elif model_to_use == 'NeuMF':
+            # Ensure embedding dimensions are correctly set by user
+            assert self.embedding_dim_gmf != 0 and self.embedding_dim_mlp != 0, \
+                "Embedding dimensions (gmf and mlp) must be defined and bigger than 0."
+            self.model = NeuMF(self.num_users, self.num_items,
+                               self.embedding_dim_gmf, self.embedding_dim_mlp).to(self.device)
+        else:
+            msg = f"The model chosen ({model_to_use}) does not exist. Please choose between 'GMF', 'MLP' and 'NeuMF'."
+            raise ValueError(msg)
 
+        self.criterion = nn.MSELoss()
+        self.optimizer = optim.Adam(self.model.parameters(), lr=self.lr, weight_decay=self.weight_decay)
+
+        # self.schedular = torch.optim.lr_scheduler.CosineAnnealingLR(
+        #    self.optimizer,
+        #    T_max=len(self.train_loader) * self.epochs)
+
+        #self.schedular = torch.optim.lr_scheduler.ReduceLROnPlateau( TODO
+        #    self.optimizer, mode='min', factor=0.9, patience=2
+        #)
 
         # Initiate list to store training evolution
         self.train_loss_history = []
@@ -127,9 +91,9 @@ class NCFTrainer:
         """Compute the training of the model"""
         # Start training
         for epoch in range(self.epochs):
-            print(f"Start Training Epoch {epoch}...")
-            train_loss, lr = self._train_epoch()
-            val_loss = self._validate()
+            print(f"Start Training Epoch {epoch + 1}...")
+            train_loss = self._train_epoch()
+            val_loss, lr = self._validate()
 
             # Give feedback to user during training
             self.display_epoch_perf(epoch, train_loss, val_loss, lr)
@@ -141,27 +105,47 @@ class NCFTrainer:
             self.val_loss_history.append(val_loss)
             self.val_rmse_history.append(np.sqrt(val_loss))
 
-            # TODO (Not sure if useful) Save the model
-            # if self.model_saving_path is not None:
-            #    self._save_model()
-
         # Plot training curves
         self._plot_training_curves()
 
-    def predict(self):
-        """Predict rating from a user and item pair TODO: denormalize score"""
-        ...
+    @torch.no_grad()
+    def predict(self, test_path: str):
+        """Predict rating from a user and item pair"""
+        # Load and format the pairs (user, item) to predict the rating
+        test_df = pd.read_csv(test_path)
+        test_df['user_idx'] = test_df['user_id'].apply(lambda x: self.user_id_to_idx[x])
+        test_df['book_idx'] = test_df['book_id'].apply(lambda x: self.item_id_to_idx[x])
+        user_item_pairs = test_df[['user_idx', 'book_idx']].values
+
+        # Predict ratings
+        self.model.eval()
+        submission = []
+        for user, item in user_item_pairs:
+            with torch.no_grad():
+                pred = self.model(torch.tensor([user]), torch.tensor([item]))
+                rescaled_pred = torch.clamp(pred, min=0, max=1) * 4 + 1  # make sure no prediction are negative
+            submission.append(rescaled_pred.item())
+
+
+        # Create the DataFrame
+        submission_df = pd.DataFrame({'id': range(len(submission)), 'rating': submission})
+
+        # Set 'id' as the index
+        submission_df.set_index('id', inplace=True)
+
+        # Save the submission in .csv format
+        submission_df.to_csv("submission.csv", index=True)
+        print("Pairs of (user, item) have been successfully predicted.")
 
     @staticmethod
     def display_epoch_perf(epoch, train_loss, val_loss, lr) -> None:
         """Print evolution of training at each epoch"""
-        print(f"Epoch {epoch + 1}:\n"
-              f"\t\t- Train: MSE loss={np.mean(train_loss):.4f}, RMSE={np.sqrt(np.mean(train_loss))}\n"
-              f"\t\t- Val: MSE loss={np.mean(val_loss):.4f}, RMSE={np.sqrt(np.mean(val_loss))}\n"
-              f"\t\t- lr={np.mean(lr):.5f}\n")
+        print(f"\t\t- Train: MSE loss={np.mean(train_loss):.4f}, RMSE={np.sqrt(np.mean(train_loss)):.4f}\n"
+              f"\t\t- Val: MSE loss={np.mean(val_loss):.4f}, RMSE={np.sqrt(np.mean(val_loss)):.4f}\n"
+              f"\t\t- lr={lr:.10f}\n")
 
-    def _train_epoch(self) -> (np.ndarray, np.ndarray):
-        """Function to train one epoch"""
+    def _train_epoch(self) -> float:
+        """Function to train one epoch and return the average loss of training epoch"""
         # Set the model in training mode
         self.model.train()
 
@@ -169,28 +153,31 @@ class NCFTrainer:
         train_loss = 0
 
         # Train all batches
-        for (user, item), target in self.train_loader:
+        for (user, item), rating in self.train_loader:
             # Move the data to the device
-            user, item, target = user.to(self.device), item.to(self.device), target.to(self.device)
+            user, item, rating = user.to(self.device), item.to(self.device), rating.to(self.device)
             # Zero the gradients
             self.optimizer.zero_grad()
             # Compute model output
             output = self.model(user, item)
+            # Denormalize ratings and outputs
+            rescaled_output = output * 4 + 1
+            rescaled_rating = rating * 4 + 1
             # Compute loss
-            loss = self.criterion(output, target)
+            loss = self.criterion(rescaled_output, rescaled_rating)
             # Backpropagation loss
             loss.backward()
             # Perform an optimizer step
             self.optimizer.step()
             # Keep track of average loss
             batch_size = len(user)
-            train_loss += self.criterion(output, target).item() * batch_size
+            train_loss += loss.item() * batch_size
 
-        return train_loss / self.train_size, self.schedular.get_last_lr()[0]
+        return train_loss / self.train_size
 
     @torch.no_grad()
-    def _validate(self) -> np.ndarray:
-        """Function to validate the epoch"""
+    def _validate(self) -> (float, float):
+        """Function to validate the epoch and return the average validation loss"""
         # Set the model in evaluation mode (turn-off the auto gradient computation, ...)
         self.model.eval()
 
@@ -198,40 +185,46 @@ class NCFTrainer:
         val_loss = 0
 
         # Compute metric per batch
-        for (user, item), target in self.val_loader:
-            user, item, target = user.to(self.device), item.to(self.device), target.to(self.device)
-            output = self.model((user, item))
+        for (user, item), rating in self.val_loader:
+            user, item, rating = user.to(self.device), item.to(self.device), rating.to(self.device)
+            output = self.model(user, item)
+            # Denormalize ratings and outputs
+            rescaled_output = torch.clamp(output, min=0, max=1) * 4 + 1  # make sure no prediction are negative
+            rescaled_rating = rating * 4 + 1
             batch_size = len(user)
-            val_loss += self.criterion(output, target).item() * batch_size
+            val_loss += self.criterion(rescaled_output, rescaled_rating).item() * batch_size
 
         avg_val_loss = val_loss / self.val_size
 
-        # Perform a learning rate scheduler step (if schedular set) TODO: bug ?
-        self.schedular.step(avg_val_loss)
+        # Step the learning rate scheduler after validation loss calculation
+        #self.schedular.step(avg_val_loss) TODO
 
-        return avg_val_loss
+        return avg_val_loss, self.lr#self.schedular.get_last_lr()[0] TODO
 
     def _plot_training_curves(self):
         """Display a nice plot to show training evolution"""
-        fig, ax = plt.subplots(1, 3, figsize=(10, 8))
+        fig, ax = plt.subplots(3, 1, figsize=(10, 12))
+
+        plt.title('Training Evolution')
 
         # plot MSE evolution
-        ax[0].plot(range(1, self.epochs+1), self.train_loss_history, label='Train')
-        ax[0].plot(range(1, self.epochs+1), self.val_loss_history, label='Val')
+        ax[0].plot(range(1, self.epochs + 1), self.train_loss_history, label='Train')
+        ax[0].plot(range(1, self.epochs + 1), self.val_loss_history, label='Val')
         ax[0].legend()
+        ax[0].set_ylim(0, 1.5)
         ax[0].set_xlabel('Epoch')
         ax[0].set_ylabel('MSE')
 
         # plot RMSE evolution
-        ax[1].plot(range(1, self.epochs+1), np.sqrt(self.train_loss_history), label='Train')
-        ax[1].plot(range(1, self.epochs+1), np.sqrt(self.val_loss_history), label='Val')
+        ax[1].plot(range(1, self.epochs + 1), np.sqrt(self.train_loss_history), label='Train')
+        ax[1].plot(range(1, self.epochs + 1), np.sqrt(self.val_loss_history), label='Val')
         ax[1].legend()
+        ax[1].set_ylim(0, 1.5)
         ax[1].set_xlabel('Epoch')
         ax[1].set_ylabel('RMSE')
 
         # plot lr evolution
         ax[2].plot(range(1, self.epochs + 1), self.lr_history)
-        ax[2].legend()
         ax[2].set_xlabel('Epoch')
         ax[2].set_ylabel('lr')
 
