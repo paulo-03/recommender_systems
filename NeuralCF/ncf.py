@@ -72,9 +72,9 @@ class NCF:
         self.criterion = nn.MSELoss()
         self.optimizer = optim.Adam(self.model.parameters(), lr=self.lr, weight_decay=self.weight_decay)
 
-        # self.schedular = torch.optim.lr_scheduler.CosineAnnealingLR(
-        #    self.optimizer,
-        #    T_max=len(self.train_loader) * self.epochs)
+        self.schedular = torch.optim.lr_scheduler.CosineAnnealingLR(
+           self.optimizer,
+           T_max=len(self.train_loader) * self.epochs)
 
         #self.schedular = torch.optim.lr_scheduler.ReduceLROnPlateau( TODO
         #    self.optimizer, mode='min', factor=0.9, patience=2
@@ -92,8 +92,8 @@ class NCF:
         # Start training
         for epoch in range(self.epochs):
             print(f"Start Training Epoch {epoch + 1}...")
-            train_loss = self._train_epoch()
-            val_loss, lr = self._validate()
+            train_loss, lr = self._train_epoch()
+            val_loss = self._validate()
 
             # Give feedback to user during training
             self.display_epoch_perf(epoch, train_loss, val_loss, lr)
@@ -122,7 +122,10 @@ class NCF:
         submission = []
         for user, item in user_item_pairs:
             with torch.no_grad():
-                pred = self.model(torch.tensor([user]), torch.tensor([item]))
+                pred = self.model(
+                  torch.tensor([user]).to(self.device), 
+                  torch.tensor([item]).to(self.device)
+                  )
                 rescaled_pred = torch.clamp(pred, min=0, max=1) * 4 + 1  # make sure no prediction are negative
             submission.append(rescaled_pred.item())
 
@@ -134,7 +137,7 @@ class NCF:
         submission_df.set_index('id', inplace=True)
 
         # Save the submission in .csv format
-        submission_df.to_csv("submission.csv", index=True)
+        submission_df.to_csv("ncf_ratings.csv", index=True)
         print("Pairs of (user, item) have been successfully predicted.")
 
     @staticmethod
@@ -144,7 +147,7 @@ class NCF:
               f"\t\t- Val: MSE loss={np.mean(val_loss):.4f}, RMSE={np.sqrt(np.mean(val_loss)):.4f}\n"
               f"\t\t- lr={lr:.10f}\n")
 
-    def _train_epoch(self) -> float:
+    def _train_epoch(self) -> (float, float):
         """Function to train one epoch and return the average loss of training epoch"""
         # Set the model in training mode
         self.model.train()
@@ -169,14 +172,16 @@ class NCF:
             loss.backward()
             # Perform an optimizer step
             self.optimizer.step()
+            # Step the learning rate scheduler
+            self.schedular.step()  # self.schedular.step(avg_val_loss) if plateau used
             # Keep track of average loss
             batch_size = len(user)
             train_loss += loss.item() * batch_size
 
-        return train_loss / self.train_size
+        return train_loss / self.train_size, self.schedular.get_last_lr()[0]
 
     @torch.no_grad()
-    def _validate(self) -> (float, float):
+    def _validate(self) -> float:
         """Function to validate the epoch and return the average validation loss"""
         # Set the model in evaluation mode (turn-off the auto gradient computation, ...)
         self.model.eval()
@@ -196,10 +201,7 @@ class NCF:
 
         avg_val_loss = val_loss / self.val_size
 
-        # Step the learning rate scheduler after validation loss calculation
-        #self.schedular.step(avg_val_loss) TODO
-
-        return avg_val_loss, self.lr#self.schedular.get_last_lr()[0] TODO
+        return avg_val_loss
 
     def _plot_training_curves(self):
         """Display a nice plot to show training evolution"""
