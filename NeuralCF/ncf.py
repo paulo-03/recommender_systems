@@ -39,8 +39,8 @@ class NCF:
         date_str = str(datetime.now()) \
             .replace(':', 'h', 1) \
             .replace(':', 'm', 1) \
-            .replace('.', 's', 1)
-        self.plot_path = os.path.join(plot_folder, date_str)
+            .replace('.', 's', 1) + '.pdf'
+        self.plot_path = os.path.join(plot_folder, date_str )
 
         # Load data and create dataloader
         dataset = InteractionDataset(data_path=data_path)
@@ -205,15 +205,13 @@ class NCF:
 
     def _plot_training_curves(self):
         """Display a nice plot to show training evolution"""
-        fig, ax = plt.subplots(3, 1, figsize=(10, 12))
-
-        plt.title('Training Evolution')
+        fig, ax = plt.subplots(3, 1, figsize=(5, 7))
 
         # plot MSE evolution
         ax[0].plot(range(1, self.epochs + 1), self.train_loss_history, label='Train')
         ax[0].plot(range(1, self.epochs + 1), self.val_loss_history, label='Val')
         ax[0].legend()
-        ax[0].set_ylim(0, 1.5)
+        ax[0].set_ylim(0.4, 0.9)
         ax[0].set_xlabel('Epoch')
         ax[0].set_ylabel('MSE')
 
@@ -221,7 +219,7 @@ class NCF:
         ax[1].plot(range(1, self.epochs + 1), np.sqrt(self.train_loss_history), label='Train')
         ax[1].plot(range(1, self.epochs + 1), np.sqrt(self.val_loss_history), label='Val')
         ax[1].legend()
-        ax[1].set_ylim(0, 1.5)
+        ax[1].set_ylim(0.6, 0.9)
         ax[1].set_xlabel('Epoch')
         ax[1].set_ylabel('RMSE')
 
@@ -230,5 +228,6 @@ class NCF:
         ax[2].set_xlabel('Epoch')
         ax[2].set_ylabel('lr')
 
+        plt.tight_layout()
         plt.savefig(self.plot_path)
         plt.show()
