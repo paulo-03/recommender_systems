@@ -4,6 +4,7 @@ This script implement a class to allow each person to easily format the data we 
 
 import numpy as np
 import pandas as pd
+from scipy.sparse import csr_matrix
 
 
 class DataFormatting:
@@ -41,3 +42,8 @@ class DataFormatting:
 
 
         return matrix_np, maps
+
+    def create_matrix_csr(self) -> (csr_matrix, dict):
+        """TODO: Can easily improve this computation"""
+        X, maps = self.create_matrix_np()
+        return csr_matrix(np.nan_to_num(X, nan=0.0)), maps
